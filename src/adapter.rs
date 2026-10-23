@@ -8,6 +8,9 @@ use lemonfiber_contract::capabilities::download;
 
 use crate::qbittorrent::Qbittorrent;
 
+/// Where qBittorrent answers, by its service id and the port it listens on.
+pub const ADDRESS: &str = "http://qbittorrent:8081";
+
 /// The upstream this adapter fronts, as its project names itself.
 pub const UPSTREAM: &str = "qBittorrent";
 

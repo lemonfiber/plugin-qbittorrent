@@ -3,15 +3,18 @@
 use std::process::ExitCode;
 use std::sync::Arc;
 
+use lemonfiber_adapter_kit::settings::{asked, Asked, Settings};
+use lemonfiber_adapter_kit::web::Web;
 use lemonfiber_contract::adapter::about_path;
 use qbittorrent_adapter::credential::Upstream;
 use qbittorrent_adapter::qbittorrent::Qbittorrent;
-use qbittorrent_adapter::settings::{asked, Asked, Settings};
-use qbittorrent_adapter::web::Web;
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    let outcome = match asked(std::env::args().skip(1)) {
+    let outcome = match asked(
+        std::env::args().skip(1),
+        qbittorrent_adapter::adapter::ADDRESS,
+    ) {
         Ok(Asked::Serve(settings)) => serve(&settings).await,
         Ok(Asked::Health(settings)) => health(&settings).await,
         Err(why) => Err(why),
@@ -31,7 +34,8 @@ async fn serve(settings: &Settings) -> Result<(), String> {
     if key.is_empty() {
         return Err("the plugin's key is empty".to_owned());
     }
-    let web = Web::new().map_err(|why| format!("no HTTP client could be made: {why}"))?;
+    let web =
+        Web::keeping_sessions().map_err(|why| format!("no HTTP client could be made: {why}"))?;
     let qbittorrent = Qbittorrent::new(
         Arc::new(web),
         settings.upstream.clone(),

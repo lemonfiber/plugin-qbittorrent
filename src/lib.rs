@@ -3,7 +3,4 @@
 
 pub mod adapter;
 pub mod credential;
-mod endpoint;
 pub mod qbittorrent;
-pub mod settings;
-pub mod web;

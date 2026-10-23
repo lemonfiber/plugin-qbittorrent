@@ -3,12 +3,12 @@
 
 use std::sync::Arc;
 
+use lemonfiber_adapter_kit::endpoint::{describe, form_encoded, Endpoint};
 use lemonfiber_ports::http::{Http, Method, Request, Response};
 use lemonfiber_ports::service::Failure;
 use serde_json::{Map, Value};
 
 use crate::credential::{Credential, Holding};
-use crate::endpoint::{describe, form_encoded, Endpoint};
 
 mod fetching;
 mod filing;
