@@ -26,8 +26,10 @@ change. `tests/conformance.rs` reads every recording with the core's own client.
 
 - **The plugin id is the service's id** (`ARCH-R266`). The container, the
   configuration directory, the settings and the journal keep their names.
-- **Its claims' and proofs' recordings sit under `recordings/qbittorrent/`**
-  (`ARCH-R271`).
+- **Its proofs' recordings sit under `recordings/qbittorrent/`**, and its
+  starting files under `config/qbittorrent/` (`ARCH-R271`), which name the
+  account lemonfiber mints as `{{secret:upstream-username}}` and
+  `{{secret:upstream-password|pbkdf2}}` (`ARCH-R316`).
 - **Every service declares `reaches` and `asks_for`** (`ARCH-R270`).
 - **The reader is spec's `first-party-plugin` workflow's.** The one Python here
   is `.github/record.py`, CI harness that records the conformance cases.
@@ -35,16 +37,16 @@ change. `tests/conformance.rs` reads every recording with the core's own client.
   `Cargo.toml` are the core's.
 - **Every value the core sends is held to its shape** before it is written into
   a query.
-- **The adapter never writes its credential.** lemonfiber writes `upstream.json`
-  into the adapter's configuration directory, holding the web UI account as
-  `username` and `password`; the adapter reads it for every sign-in and never
-  logs it.
+- **The adapter never writes its credential.** lemonfiber mints the web UI
+  account and writes it into the adapter's `upstream.json` as `username` and
+  `password`, as the adapter's `upstream` maps them (`ARCH-R315`, `ARCH-R317`);
+  the adapter reads it for every sign-in and never logs it.
 - **The core's crates move with the train.** The `rev` in `Cargo.toml` is the
   core commit `targets.toml` names, the same for every `lemonfiber-*` crate.
-- **Moving qBittorrent's digest** means recording every response and conformance
-  case again against the new image in the same change, moving `RELEASE` and
-  `DIGEST` in `src/adapter.rs` with it, and committing the `proofs.json` the
-  checks write.
+- **Moving qBittorrent's digest** means recording every proof's response and
+  conformance case again against the new image in the same change, moving
+  `RELEASE` and `DIGEST` in `src/adapter.rs` with it, and committing the
+  `proofs.json` the checks write.
 
 ## Checks
 
