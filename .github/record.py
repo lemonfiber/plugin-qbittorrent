@@ -60,11 +60,12 @@ read -r temporary
 base="http://localhost:$LISTENS/api/v2"
 jar=$(mktemp)
 ask() { curl -sS --retry 30 --retry-connrefused --retry-delay 2 -c "$jar" -b "$jar" "$@"; }
+signin() { printf %s "$1" | ask --data-urlencode "username=$USERNAME" --data-urlencode "password@-" "$base/auth/login" >/dev/null; }
 minted=$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32)
-ask --data-urlencode "username=$USERNAME" --data-urlencode "password=$temporary" "$base/auth/login" >/dev/null
-ask --data-urlencode "json={\"web_ui_password\":\"$minted\"}" "$base/app/setPreferences" >/dev/null
+signin "$temporary"
+printf '{"web_ui_password":"%s"}' "$minted" | ask --data-urlencode "json@-" "$base/app/setPreferences" >/dev/null
 ask -X POST "$base/auth/logout" >/dev/null
-ask --data-urlencode "username=$USERNAME" --data-urlencode "password=$minted" "$base/auth/login" >/dev/null
+signin "$minted"
 test "$(ask -o /dev/null -w '%{http_code}' "$base/app/version")" = 200
 rm -f "$jar"
 umask 077
