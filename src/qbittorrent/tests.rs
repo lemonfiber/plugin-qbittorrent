@@ -136,6 +136,16 @@ async fn it_answers_while_its_web_ui_answers_signed_in_or_not() {
 }
 
 #[tokio::test]
+async fn a_call_refused_as_unauthorised_is_unauthorised() {
+    let (qbittorrent, http) = client(vec![(401, "Unauthorized")]);
+    assert!(matches!(
+        qbittorrent.transfers().await,
+        Err(Failure::Unauthorised { .. })
+    ));
+    assert_eq!(http.requests().len(), 1);
+}
+
+#[tokio::test]
 async fn a_client_that_stops_answering_after_signing_in_is_unavailable() {
     let (qbittorrent, _) = client(vec![OUT, IN]);
     assert!(matches!(

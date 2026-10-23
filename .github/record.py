@@ -140,7 +140,7 @@ def temporary_password(log: str) -> str | None:
 def first_run(container: str, listens: int, temporary: str, password: str) -> bool:
     """The temporary password replaced with `password` inside the container, and proved."""
     base = f"http://localhost:{listens}/api/v2"
-    jar = "/tmp/lemonfiber-record-cookies"
+    jar = "/config/lemonfiber-record-cookies"
 
     def curl(*args: str) -> str:
         return docker("exec", container, "curl", "-sS", "-c", jar, "-b", jar, *args, check=False)
