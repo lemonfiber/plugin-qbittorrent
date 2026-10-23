@@ -61,7 +61,7 @@ base="http://localhost:$LISTENS/api/v2"
 jar=$(mktemp)
 ask() { curl -sS --retry 30 --retry-connrefused --retry-delay 2 -c "$jar" -b "$jar" "$@"; }
 signin() { printf %s "$1" | ask --data-urlencode "username=$USERNAME" --data-urlencode "password@-" "$base/auth/login" >/dev/null; }
-minted=$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32)
+minted=$(tr -dc 'a-f0-9' </dev/urandom | head -c 32)
 signin "$temporary"
 printf '{"web_ui_password":"%s"}' "$minted" | ask --data-urlencode "json@-" "$base/app/setPreferences" >/dev/null
 ask -X POST "$base/auth/logout" >/dev/null
