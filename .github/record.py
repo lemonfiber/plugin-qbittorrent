@@ -12,12 +12,14 @@ plugin's own service, on a network with no route off the host, so nothing it
 answers depends on a tracker or a peer. The adapter runs from this repository's
 Dockerfile, as lemonfiber runs it: the caller's uid, read-only, no
 capabilities, the key and the upstream credential owner-only in its
-configuration directory. A one-shot container in qBittorrent's own network
-namespace stands where lemonfiber stands: handed the temporary password qBittorrent announces in
-its log on its first start, it mints the run's password inside the run, sets it
-in qBittorrent, proves it, and writes it to the adapter's `upstream.json` beside
-`lemonfiber.key`. This script never mints or writes qBittorrent's password; it
-reads `upstream.json` back only to refuse any answer that holds it.
+configuration directory. A one-shot container of the pinned image stands
+where lemonfiber stands, before qBittorrent first starts: it mints every secret
+`plugin.toml` declares `minted`, writes each into the starting files under
+`config/qbittorrent/` where they name it, the password as the PBKDF2 hash
+qBittorrent keeps, and writes the adapter's `upstream.json` as the adapter's
+`upstream` maps its fields to those secrets. This script never mints or writes
+qBittorrent's account; it reads `upstream.json` back only to refuse any answer
+that holds it.
 
     python3 .github/record.py            write conformance/
     python3 .github/record.py --check    record again and compare
@@ -33,6 +35,7 @@ import os
 import pathlib
 import re
 import secrets
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -52,25 +55,33 @@ ANSWER_S = 30
 ADAPTER_PORT = 8080
 SEGMENT = re.compile(r"[a-z][a-z0-9_.]*")
 MAJOR = re.compile(r"[1-9]\d*")
-USERNAME = "admin"
-TEMPORARY = "A temporary password is provided for this session:"
 SEED = r"""
-set -eu
-read -r temporary
-base="http://localhost:$LISTENS/api/v2"
-jar=$(mktemp)
-ask() { curl -sS --retry 30 --retry-connrefused --retry-delay 2 -c "$jar" -b "$jar" "$@"; }
-signin() { printf %s "$1" | ask --data-urlencode "username=$USERNAME" --data-urlencode "password@-" "$base/auth/login" >/dev/null; }
-minted=$(tr -dc 'a-f0-9' </dev/urandom | head -c 32)
-signin "$temporary"
-printf '{"web_ui_password":"%s"}' "$minted" | ask --data-urlencode "json@-" "$base/app/setPreferences" >/dev/null
-ask -X POST "$base/auth/logout" >/dev/null
-signin "$minted"
-test "$(ask -o /dev/null -w '%{http_code}' "$base/app/version")" = 200
-rm -f "$jar"
-umask 077
-printf '{"username":"%s","password":"%s"}' "$USERNAME" "$minted" > /adapter/upstream.json
-chown "$OWNER" /adapter/upstream.json
+import base64, hashlib, json, os, pathlib, re, secrets
+SECRET = re.compile(r"\{\{secret:([a-z0-9-]+)(\|pbkdf2)?\}\}")
+ROUNDS = 100_000
+minted = {name: secrets.token_hex(16) for name in json.loads(os.environ["MINTED"])}
+def written(named):
+    value = minted[named.group(1)]
+    if not named.group(2):
+        return value
+    salt = os.urandom(16)
+    hashed = hashlib.pbkdf2_hmac("sha512", value.encode(), salt, ROUNDS)
+    return f"@ByteArray({base64.b64encode(salt).decode()}:{base64.b64encode(hashed).decode()})"
+for path in pathlib.Path("/config").rglob("*"):
+    if path.is_file():
+        text = path.read_text(encoding="utf-8")
+        unminted = {named.group(1) for named in SECRET.finditer(text)} - minted.keys()
+        if unminted:
+            raise SystemExit(f"{path.name} names {', '.join(sorted(unminted))}, which plugin.toml mints no value for")
+        path.write_text(SECRET.sub(written, text), encoding="utf-8")
+        path.chmod(0o600)
+os.umask(0o077)
+fields = json.loads(os.environ["FIELDS"])
+held = pathlib.Path("/adapter/upstream.json")
+held.write_text(json.dumps({field: minted[name] for field, name in fields.items()}), encoding="utf-8")
+owner = [int(part) for part in os.environ["OWNER"].split(":")]
+for path in (held, *pathlib.Path("/config").rglob("*"), pathlib.Path("/config")):
+    os.chown(path, *owner)
 """
 NOTES = {
     "refuses-without-the-key": "Asked without the plugin's key: the kit refuses it before the adapter is reached.",
@@ -98,12 +109,17 @@ def docker(*args: str, check: bool = True) -> str:
     return done.stdout.strip()
 
 
-def manifest() -> tuple[str, str, int]:
-    """The plugin's own service: its id, its pinned image and the port it listens on."""
+def manifest() -> tuple[str, str, int, list[str], dict[str, str]]:
+    """The plugin's own service: its id, its pinned image and the port it listens on; every
+    secret declared `minted`; and the secret each field of the adapter's `upstream.json`
+    holds."""
     read = tomllib.loads((ROOT / "plugin.toml").read_text(encoding="utf-8"))
     plugin = read["plugin"]["id"]
     upstream = next(one for one in read["service"] if one["id"] == plugin)
-    return plugin, f"{upstream['image']}@{upstream['digest']}", upstream["listens"]
+    adapter = next(one for one in read["service"] if one.get("fronts") == plugin)
+    minted = [one["id"] for one in read.get("secret", []) if one.get("minted")]
+    fields = {field: held["secret"] for field, held in adapter.get("upstream", {}).items()}
+    return plugin, f"{upstream['image']}@{upstream['digest']}", upstream["listens"], minted, fields
 
 
 def core_rev() -> str:
@@ -148,25 +164,17 @@ def recording(pinned: str, path: str, status: int, kind: str, body: str, note: s
     }
 
 
-def temporary_password(log: str) -> str | None:
-    """The temporary password qBittorrent announced last in its log, as lemonfiber reads it."""
-    for line in reversed(log.splitlines()):
-        _, found, password = line.partition(TEMPORARY)
-        if found and password.strip():
-            return password.strip()
-    return None
-
-
-def seeded(name: str, upstream: str, listens: int, pinned: str, adapter: pathlib.Path,
-           temporary: str) -> None:
-    """The run's password minted and set inside a one-shot container, and written to `upstream.json`."""
+def seeded(name: str, pinned: str, upstream: pathlib.Path, adapter: pathlib.Path,
+           minted: list[str], fields: dict[str, str]) -> None:
+    """The starting files seeded and `upstream.json` written inside a one-shot container."""
     done = subprocess.run(
-        ["docker", "run", "--rm", "-i", "--name", f"{name}-seed", "--network", f"container:{upstream}",
-         "--entrypoint", "sh", "-e", f"LISTENS={listens}", "-e", f"USERNAME={USERNAME}",
-         "-e", f"OWNER={os.getuid()}:{os.getgid()}", "-v", f"{adapter}:/adapter", pinned, "-c", SEED],
-        input=f"{temporary}\n", capture_output=True, text=True, check=False)
+        ["docker", "run", "--rm", "--name", f"{name}-seed", "--network", "none", "--entrypoint", "python3",
+         "-e", f"MINTED={json.dumps(minted)}", "-e", f"FIELDS={json.dumps(fields)}",
+         "-e", f"OWNER={os.getuid()}:{os.getgid()}", "-v", f"{upstream}:/config", "-v", f"{adapter}:/adapter",
+         pinned, "-c", SEED],
+        capture_output=True, text=True, check=False)
     if done.returncode != 0:
-        raise RuntimeError(f"qBittorrent did not take the password minted for the run: {done.stderr.strip()}")
+        raise RuntimeError(f"the starting files were not seeded: {done.stderr.strip()}")
 
 
 def owner_only(directory: pathlib.Path) -> None:
@@ -185,7 +193,8 @@ def waited(what: str, ready) -> object:
     raise RuntimeError(f"{what} within {STARTUP_S}s")
 
 
-def recorded_live(plugin: str, pinned: str, listens: int) -> tuple[list[str], dict[tuple[str, str], dict]]:
+def recorded_live(plugin: str, pinned: str, listens: int, minted: list[str],
+                  fields: dict[str, str]) -> tuple[list[str], dict[tuple[str, str], dict]]:
     """What the adapter speaks, and every case asked of it in front of a throwaway qBittorrent."""
     name = f"{plugin}-record-{uuid.uuid4().hex[:8]}"
     inside, outside = f"{name}-inside", f"{name}-outside"
@@ -193,19 +202,21 @@ def recorded_live(plugin: str, pinned: str, listens: int) -> tuple[list[str], di
     with tempfile.TemporaryDirectory() as held:
         held = pathlib.Path(held)
         upstream, data, adapter = held / "upstream", held / "data", held / "adapter"
-        for directory in (upstream, data, adapter):
+        shutil.copytree(ROOT / "config" / plugin, upstream)
+        for directory in (data, adapter):
             directory.mkdir()
         try:
+            seeded(name, pinned, upstream, adapter, minted, fields)
             docker("network", "create", "--internal", inside)
             docker("network", "create", outside)
             docker("run", "-d", "--name", f"{name}-upstream", "--network", inside,
                    "--network-alias", plugin, "-e", f"PUID={os.getuid()}", "-e", f"PGID={os.getgid()}",
                    "-e", "TZ=Etc/UTC", "-e", f"WEBUI_PORT={listens}",
                    "-v", f"{upstream}:/config", "-v", f"{data}:/data", pinned)
-            temporary = waited("qBittorrent announced no temporary password",
-                               lambda: temporary_password(docker("logs", f"{name}-upstream", check=False)))
+            waited("qBittorrent did not answer", lambda: docker(
+                "exec", f"{name}-upstream", "curl", "-sS", "-o", "/dev/null", "-w", "%{http_code}",
+                f"http://localhost:{listens}/api/v2/app/version", check=False) in ("200", "403"))
             (adapter / "lemonfiber.key").write_text(key, encoding="utf-8")
-            seeded(name, f"{name}-upstream", listens, pinned, adapter, temporary)
             owner_only(adapter)
             docker("build", "-q", "-t", f"{name}:adapter", str(ROOT))
             docker("create", "--name", f"{name}-adapter", "--network", outside,
@@ -219,9 +230,9 @@ def recorded_live(plugin: str, pinned: str, listens: int) -> tuple[list[str], di
             waited("the adapter was not ready", lambda: answering(base, key))
             speaks = json.loads(asked(base, "/lemonfiber/adapter/v1/about", key)[2])["speaks"]
             said = recorded(base, key, pinned, speaks)
-            minted = json.loads((adapter / "upstream.json").read_text(encoding="utf-8"))["password"]
+            held = json.loads((adapter / "upstream.json").read_text(encoding="utf-8")).values()
             leaked = [case for case, one in said.items()
-                      if any(secret in json.dumps(one) for secret in (minted, temporary, key))]
+                      if any(secret in json.dumps(one) for secret in (*held, key))]
             if leaked:
                 raise RuntimeError(f"an answer holds a credential, so nothing is written: {leaked}")
             return speaks, said
@@ -286,8 +297,8 @@ def main() -> int:
     parser.add_argument("--check", action="store_true", help="record again and compare with conformance/")
     checking = parser.parse_args().check
 
-    plugin, pinned, listens = manifest()
-    speaks, said = recorded_live(plugin, pinned, listens)
+    plugin, pinned, listens, minted, fields = manifest()
+    speaks, said = recorded_live(plugin, pinned, listens, minted, fields)
     faults = [fault for spoken in speaks for case in published_cases(spoken)
               if (fault := filed(said, spoken, case["case"], checking)) is not None]
     for fault in faults:
