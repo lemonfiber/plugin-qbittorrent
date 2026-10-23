@@ -12,10 +12,12 @@ plugin's own service, on a network with no route off the host, so nothing it
 answers depends on a tracker or a peer. The adapter runs from this repository's
 Dockerfile, as lemonfiber runs it: the caller's uid, read-only, no
 capabilities, the key and the upstream credential owner-only in its
-configuration directory. This script stands where lemonfiber stands: it reads
-the temporary password qBittorrent announces in its log on its first start,
-replaces it with one minted here, writes that to the adapter's `upstream.json`
-beside `lemonfiber.key`, and asks.
+configuration directory. A one-shot container in qBittorrent's own network
+namespace stands where lemonfiber stands: handed the temporary password qBittorrent announces in
+its log on its first start, it mints the run's password inside the run, sets it
+in qBittorrent, proves it, and writes it to the adapter's `upstream.json` beside
+`lemonfiber.key`. This script never mints or writes qBittorrent's password; it
+reads `upstream.json` back only to refuse any answer that holds it.
 
     python3 .github/record.py            write conformance/
     python3 .github/record.py --check    record again and compare
@@ -52,6 +54,23 @@ SEGMENT = re.compile(r"[a-z][a-z0-9_.]*")
 MAJOR = re.compile(r"[1-9]\d*")
 USERNAME = "admin"
 TEMPORARY = "A temporary password is provided for this session:"
+SEED = r"""
+set -eu
+read -r temporary
+base="http://localhost:$LISTENS/api/v2"
+jar=$(mktemp)
+ask() { curl -sS --retry 30 --retry-connrefused --retry-delay 2 -c "$jar" -b "$jar" "$@"; }
+minted=$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32)
+ask --data-urlencode "username=$USERNAME" --data-urlencode "password=$temporary" "$base/auth/login" >/dev/null
+ask --data-urlencode "json={\"web_ui_password\":\"$minted\"}" "$base/app/setPreferences" >/dev/null
+ask -X POST "$base/auth/logout" >/dev/null
+ask --data-urlencode "username=$USERNAME" --data-urlencode "password=$minted" "$base/auth/login" >/dev/null
+test "$(ask -o /dev/null -w '%{http_code}' "$base/app/version")" = 200
+rm -f "$jar"
+umask 077
+printf '{"username":"%s","password":"%s"}' "$USERNAME" "$minted" > /adapter/upstream.json
+chown "$OWNER" /adapter/upstream.json
+"""
 NOTES = {
     "refuses-without-the-key": "Asked without the plugin's key: the kit refuses it before the adapter is reached.",
     "transfers-answers": "What a fresh qBittorrent is downloading: nothing.",
@@ -137,22 +156,16 @@ def temporary_password(log: str) -> str | None:
     return None
 
 
-def first_run(container: str, listens: int, temporary: str, password: str) -> bool:
-    """The temporary password replaced with `password` inside the container, and proved."""
-    base = f"http://localhost:{listens}/api/v2"
-    jar = "/config/lemonfiber-record-cookies"
-
-    def curl(*args: str) -> str:
-        return docker("exec", container, "curl", "-sS", "-c", jar, "-b", jar, *args, check=False)
-
-    curl("--data-urlencode", f"username={USERNAME}", "--data-urlencode", f"password={temporary}",
-         f"{base}/auth/login")
-    preferences = json.dumps({"web_ui_password": password})
-    curl("--data-urlencode", f"json={preferences}", f"{base}/app/setPreferences")
-    curl("-X", "POST", f"{base}/auth/logout")
-    curl("--data-urlencode", f"username={USERNAME}", "--data-urlencode", f"password={password}",
-         f"{base}/auth/login")
-    return curl("-o", "/dev/null", "-w", "%{http_code}", f"{base}/app/version") == "200"
+def seeded(name: str, upstream: str, listens: int, pinned: str, adapter: pathlib.Path,
+           temporary: str) -> None:
+    """The run's password minted and set inside a one-shot container, and written to `upstream.json`."""
+    done = subprocess.run(
+        ["docker", "run", "--rm", "-i", "--name", f"{name}-seed", "--network", f"container:{upstream}",
+         "--entrypoint", "sh", "-e", f"LISTENS={listens}", "-e", f"USERNAME={USERNAME}",
+         "-e", f"OWNER={os.getuid()}:{os.getgid()}", "-v", f"{adapter}:/adapter", pinned, "-c", SEED],
+        input=f"{temporary}\n", capture_output=True, text=True, check=False)
+    if done.returncode != 0:
+        raise RuntimeError(f"qBittorrent did not take the password minted for the run: {done.stderr.strip()}")
 
 
 def owner_only(directory: pathlib.Path) -> None:
@@ -176,7 +189,6 @@ def recorded_live(plugin: str, pinned: str, listens: int) -> tuple[list[str], di
     name = f"{plugin}-record-{uuid.uuid4().hex[:8]}"
     inside, outside = f"{name}-inside", f"{name}-outside"
     key = secrets.token_hex(24)
-    password = secrets.token_urlsafe(24)
     with tempfile.TemporaryDirectory() as held:
         held = pathlib.Path(held)
         upstream, data, adapter = held / "upstream", held / "data", held / "adapter"
@@ -191,11 +203,8 @@ def recorded_live(plugin: str, pinned: str, listens: int) -> tuple[list[str], di
                    "-v", f"{upstream}:/config", "-v", f"{data}:/data", pinned)
             temporary = waited("qBittorrent announced no temporary password",
                                lambda: temporary_password(docker("logs", f"{name}-upstream", check=False)))
-            waited("qBittorrent did not take the password minted for it",
-                   lambda: first_run(f"{name}-upstream", listens, temporary, password))
             (adapter / "lemonfiber.key").write_text(key, encoding="utf-8")
-            (adapter / "upstream.json").write_text(
-                json.dumps({"username": USERNAME, "password": password}), encoding="utf-8")
+            seeded(name, f"{name}-upstream", listens, pinned, adapter, temporary)
             owner_only(adapter)
             docker("build", "-q", "-t", f"{name}:adapter", str(ROOT))
             docker("create", "--name", f"{name}-adapter", "--network", outside,
@@ -209,13 +218,14 @@ def recorded_live(plugin: str, pinned: str, listens: int) -> tuple[list[str], di
             waited("the adapter was not ready", lambda: answering(base, key))
             speaks = json.loads(asked(base, "/lemonfiber/adapter/v1/about", key)[2])["speaks"]
             said = recorded(base, key, pinned, speaks)
+            minted = json.loads((adapter / "upstream.json").read_text(encoding="utf-8"))["password"]
             leaked = [case for case, one in said.items()
-                      if any(secret in json.dumps(one) for secret in (password, temporary, key))]
+                      if any(secret in json.dumps(one) for secret in (minted, temporary, key))]
             if leaked:
                 raise RuntimeError(f"an answer holds a credential, so nothing is written: {leaked}")
             return speaks, said
         finally:
-            for container in (f"{name}-adapter", f"{name}-upstream"):
+            for container in (f"{name}-adapter", f"{name}-seed", f"{name}-upstream"):
                 docker("rm", "-fv", container, check=False)
             docker("rmi", f"{name}:adapter", check=False)
             for network in (inside, outside):
