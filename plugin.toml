@@ -27,6 +27,7 @@ asks_for    = "Announces to a torrent's trackers and exchanges data with peers, 
 takes_data  = true
 user_mode   = "puid-env"
 network     = { via = "network.egress-guard" }
+native      = "qbittorrent"
 replaces    = "qbittorrent"
 
 [service.env]
