@@ -18,7 +18,12 @@ pub(super) fn a_password() -> String {
 }
 
 pub(super) fn client(replies: Vec<(u16, &'static str)>) -> (Qbittorrent, Arc<Fake>) {
-    let http = Fake::scripted(replies);
+    let http = Fake::in_turn(
+        replies
+            .into_iter()
+            .map(|(status, body)| Answer::reply(status, body))
+            .collect(),
+    );
     let held = Credential {
         username: "admin".to_owned(),
         password: a_password(),
