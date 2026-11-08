@@ -48,14 +48,14 @@ impl Holding for Nothing {
 
 #[tokio::test]
 async fn a_session_already_held_is_asked_under_without_signing_in() {
-    let (qbittorrent, http) = client(vec![(200, "[]")]);
+    let (qbittorrent, http) = client(vec![(200, "[]"), (200, "[]")]);
     assert_eq!(qbittorrent.transfers().await.ok(), Some(Vec::new()));
-    assert_eq!(asked(&http).len(), 1);
+    assert_eq!(asked(&http).len(), 2);
 }
 
 #[tokio::test]
 async fn a_session_it_does_not_hold_is_opened_with_the_credential_and_asked_again() {
-    let (qbittorrent, http) = client(vec![OUT, IN, (200, "[]")]);
+    let (qbittorrent, http) = client(vec![OUT, IN, (200, "[]"), (200, "[]")]);
     assert_eq!(qbittorrent.transfers().await.ok(), Some(Vec::new()));
     let sent = asked(&http);
     assert_eq!(
@@ -81,7 +81,7 @@ async fn a_session_it_does_not_hold_is_opened_with_the_credential_and_asked_agai
 
 #[tokio::test]
 async fn the_five_line_signs_in_with_no_content_and_refuses_with_unauthorised() {
-    let (signed_in, _) = client(vec![OUT, (204, ""), (200, "[]")]);
+    let (signed_in, _) = client(vec![OUT, (204, ""), (200, "[]"), (200, "[]")]);
     assert!(signed_in.transfers().await.is_ok());
     for refused in [(401, ""), (200, "Fails."), (403, "")] {
         let (qbittorrent, _) = client(vec![OUT, refused]);
