@@ -17,8 +17,7 @@ pub const UPSTREAM: &str = "qBittorrent";
 /// The qBittorrent release this adapter's recordings were taken from.
 pub const RELEASE: &str = "5.2.4_v2.0.15-ls480";
 
-/// The digest of the image that release's recordings were taken from.
-pub const DIGEST: &str = "sha256:97333cc1ccf903e0bbcd8eb67e3332e4970e9c1ecabe145e499e9c0847ebcaed";
+include!(concat!(env!("OUT_DIR"), "/fronted.rs"));
 
 /// What this adapter says it is: the contract it speaks and the release it supports.
 #[must_use]
