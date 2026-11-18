@@ -17,6 +17,10 @@ published from every commit on `main` and from each tag the release train cuts.
 lemonfiber mints the web UI account the adapter signs in with, writes its name and
 the PBKDF2 hash of its password into qBittorrent's starting `qBittorrent.conf`,
 writes both into the adapter's `upstream.json`, and hands them to nothing else.
+The adapter signs in whether qBittorrent answers `200 Ok.` with a cookie named `SID`
+or `204` with one named `QBT_SID_` and its web UI port, and carries whichever it set.
+qBittorrent's host-header validation stays on: every address it is reached by names
+the port its web UI listens on, which is the port a request's `Host` is held to.
 
 ## What is here
 
