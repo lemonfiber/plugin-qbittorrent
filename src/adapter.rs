@@ -14,9 +14,6 @@ pub const ADDRESS: &str = "http://qbittorrent:8081";
 /// The upstream this adapter fronts, as its project names itself.
 pub const UPSTREAM: &str = "qBittorrent";
 
-/// The qBittorrent release this adapter's recordings were taken from.
-pub const RELEASE: &str = "5.2.4_v2.0.15-ls480";
-
 include!(concat!(env!("OUT_DIR"), "/fronted.rs"));
 
 /// What this adapter says it is: the contract it speaks and the release it supports.
